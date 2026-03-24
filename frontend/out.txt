@@ -1,0 +1,2 @@
+src/components/ui/UploadZone.tsx(2,10): error TS6133: 'Upload' is declared but its value is never read.
+src/pages/ProjectTeam.tsx(4,17): error TS6133: 'AlertCircle' is declared but its value is never read.

@@ -1,5 +1,7 @@
 import { useDropzone } from "react-dropzone";
-import { Upload, FileText } from "lucide-react";
+import { FileText, UploadCloud } from "lucide-react";
+import { motion } from "framer-motion";
+import { cn } from "../../lib/utils";
 
 interface UploadZoneProps {
   onFile: (file: File) => void;
@@ -16,16 +18,34 @@ export function UploadZone({ onFile, label }: UploadZoneProps) {
   return (
     <div
       {...getRootProps()}
-      className={`glass border-2 border-dashed rounded-3xl p-12 text-center transition-all cursor-pointer hover:border-violet-500 group ${
-        isDragActive ? "border-violet-500 scale-105" : "border-slate-700"
-      }`}
+      className={cn(
+        "relative overflow-hidden border-2 border-dashed rounded-3xl p-12 text-center transition-all duration-300 cursor-pointer group bg-muted/20",
+        isDragActive 
+          ? "border-primary bg-primary/5 scale-[1.02] shadow-xl shadow-primary/10" 
+          : "border-border hover:border-primary/50 hover:bg-muted/50"
+      )}
     >
       <input {...getInputProps()} />
-      <div className="mx-auto w-16 h-16 bg-violet-500/10 rounded-2xl flex items-center justify-center mb-6 group-hover:rotate-12 transition">
-        <FileText className="w-8 h-8 text-violet-400" />
-      </div>
-      <p className="text-lg font-medium mb-1">{label}</p>
-      <p className="text-slate-400 text-sm">Drag & drop PDF or click to upload</p>
+      
+      <motion.div 
+        animate={{ y: isDragActive ? -10 : 0 }}
+        className={cn(
+          "mx-auto w-16 h-16 rounded-2xl flex items-center justify-center mb-6 transition-colors duration-300 shadow-sm",
+          isDragActive ? "bg-primary text-primary-foreground" : "bg-background border border-border text-muted-foreground group-hover:text-primary group-hover:border-primary/30"
+        )}
+      >
+        {isDragActive ? <FileText className="w-8 h-8" /> : <UploadCloud className="w-8 h-8" />}
+      </motion.div>
+      
+      <h3 className={cn(
+        "text-lg font-bold mb-2 transition-colors",
+        isDragActive ? "text-primary" : "text-foreground"
+      )}>
+        {label}
+      </h3>
+      <p className="text-muted-foreground text-sm font-medium">
+        {isDragActive ? "Drop the PDF right here..." : "Drag & drop PDF or click to browse"}
+      </p>
     </div>
   );
 }

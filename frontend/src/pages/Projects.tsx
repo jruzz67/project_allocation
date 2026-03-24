@@ -1,9 +1,11 @@
 import { useState, useEffect } from "react";
 import { api, apiForm } from "../lib/api";
 import { UploadZone } from "../components/ui/UploadZone";
-import { FolderOpen, Plus, Play, Eye, RotateCw } from "lucide-react";
-import { motion } from "framer-motion";
-import { Link } from "react-router-dom";
+import { FolderOpen, Plus, Play, Eye, RotateCw, Trash2, LayoutGrid, Search, RotateCcw } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
+import { Link, useNavigate } from "react-router-dom";
+import toast from "react-hot-toast";
+import { cn } from "../lib/utils";
 
 interface Project {
   id: number;
@@ -12,10 +14,18 @@ interface Project {
   project_load: number;
 }
 
+function projectLabel(description: string, maxLen = 60): string {
+  const firstLine = description.split(/\n/)[0].trim();
+  const label = firstLine || description;
+  return label.length > maxLen ? label.slice(0, maxLen) + "…" : label;
+}
+
 export default function Projects() {
+  const navigate = useNavigate();
   const [allProjects, setAllProjects] = useState<Project[]>([]);
   const [allocated, setAllocated] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState("");
   const [form, setForm] = useState({ teamSize: 5, load: 10 });
   const [pdf, setPdf] = useState<File | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -33,8 +43,8 @@ export default function Projects() {
       ]);
       setAllProjects(all.data);
       setAllocated(alloc.data);
-    } catch (err) {
-      console.error(err);
+    } catch {
+      toast.error("Failed to load projects");
     } finally {
       setLoading(false);
     }
@@ -42,7 +52,10 @@ export default function Projects() {
 
   const createProject = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!pdf) return alert("Please upload a PDF");
+    if (!pdf) {
+      toast.error("Please upload a PDF first");
+      return;
+    }
 
     setSubmitting(true);
     const data = new FormData();
@@ -50,200 +63,328 @@ export default function Projects() {
     data.append("project_load", form.load.toString());
     data.append("file", pdf);
 
+    const toastId = toast.loading("Analyzing project requirements...");
     try {
       await apiForm.post("/projects", data);
+      toast.success("Project created successfully!", { id: toastId });
       setForm({ teamSize: 5, load: 10 });
       setPdf(null);
       loadProjects();
     } catch {
-      alert("Failed to create project");
+      toast.error("Failed to create project", { id: toastId });
     } finally {
       setSubmitting(false);
     }
   };
 
-  const unallocated = allProjects.filter(
-    (p) => !allocated.some((a) => a.id === p.id)
+  const deleteProject = (projectId: number) => {
+    // 1. Save current states
+    const previousAll = [...allProjects];
+    const previousAllocated = [...allocated];
+    
+    // 2. Optimistic UI Update (Instant removal)
+    setAllProjects(allProjects.filter(p => p.id !== projectId));
+    setAllocated(allocated.filter(p => p.id !== projectId));
+
+    // 3. Start 5-second timer
+    const timeoutId = setTimeout(async () => {
+      try {
+        await api.delete(`/projects/${projectId}`);
+      } catch (err: any) {
+        toast.error("Failed to delete project. Restoring...");
+        setAllProjects(previousAll);
+        setAllocated(previousAllocated);
+      }
+    }, 5000);
+
+    // 4. Show Undo Toast
+    toast(
+      (t) => (
+        <div className="flex items-center justify-between w-full gap-6">
+          <div className="flex flex-col">
+            <span className="font-bold text-foreground">Project Archived</span>
+            <span className="text-xs text-muted-foreground">Resources have been freed</span>
+          </div>
+          <button
+            onClick={() => {
+              clearTimeout(timeoutId); // Cancel deletion
+              setAllProjects(previousAll); // Put it back
+              setAllocated(previousAllocated);
+              toast.dismiss(t.id);
+            }}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-primary/10 text-primary hover:bg-primary hover:text-primary-foreground rounded-lg font-bold text-sm transition-colors"
+          >
+            <RotateCcw size={14} /> Undo
+          </button>
+        </div>
+      ),
+      { duration: 5000, id: `delete-proj-${projectId}` }
+    );
+  };
+
+  // Derived states with search filter applied
+  const filteredAll = allProjects.filter(p => projectLabel(p.description).toLowerCase().includes(searchQuery.toLowerCase()));
+  const filteredAllocated = allocated.filter(p => projectLabel(p.description).toLowerCase().includes(searchQuery.toLowerCase()));
+  
+  const unallocated = filteredAll.filter(
+    (p) => !filteredAllocated.some((a) => a.id === p.id)
   );
 
   return (
-    <div className="p-6 md:p-12 max-w-7xl mx-auto">
-      {/* Header */}
-      <motion.h1
-        initial={{ opacity: 0, y: -20 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="text-5xl md:text-6xl font-extrabold mb-3 bg-gradient-to-r from-violet-400 via-fuchsia-400 to-emerald-400 bg-clip-text text-transparent"
-      >
-        TeamForge
-      </motion.h1>
-      <p className="text-xl text-slate-400 mb-16">AI-Powered • Semantic • Optimized</p>
-
-      {/* Create Project Form */}
-      <motion.section
-        initial={{ opacity: 0, y: 30 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.1 }}
-        className="glass rounded-3xl p-8 md:p-10 mb-16 shadow-2xl border border-white/5"
-      >
-        <h2 className="text-3xl font-bold mb-8 flex items-center gap-4">
-          <Plus className="w-9 h-9 text-emerald-400" />
-          Create New Project
-        </h2>
-
-        <form onSubmit={createProject} className="space-y-8">
-          <div className="grid md:grid-cols-2 gap-8">
-            <div>
-              <label className="block text-sm font-medium mb-3 text-slate-300">Team Size</label>
-              <input
-                type="number"
-                min="1"
-                value={form.teamSize}
-                onChange={(e) => setForm({ ...form, teamSize: +e.target.value })}
-                className="w-full bg-slate-800/70 border border-slate-600 rounded-2xl px-6 py-4 focus:outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/30 transition"
-                required
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium mb-3 text-slate-300">Load per Person (hours)</label>
-              <input
-                type="number"
-                step="0.1"
-                min="0.1"
-                value={form.load}
-                onChange={(e) => setForm({ ...form, load: +e.target.value })}
-                className="w-full bg-slate-800/70 border border-slate-600 rounded-2xl px-6 py-4 focus:outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/30 transition"
-                required
-              />
-            </div>
+    <div className="p-6 md:p-10 max-w-7xl mx-auto space-y-12">
+      
+      {/* Page Header */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
+        <div className="flex items-center gap-5">
+          <div className="w-14 h-14 bg-primary/10 rounded-2xl flex items-center justify-center text-primary border border-primary/20 shadow-sm">
+            <LayoutGrid size={28} />
           </div>
-
           <div>
-            <label className="block text-sm font-medium mb-3 text-slate-300">Project Brief (PDF)</label>
-            <UploadZone
-              onFile={setPdf}
-              label={pdf ? pdf.name : "Drag & drop or click to upload PDF"}
-            />
+            <motion.h1 
+              initial={{ opacity: 0, x: -20 }}
+              animate={{ opacity: 1, x: 0 }}
+              className="text-3xl md:text-4xl font-black tracking-tight text-foreground"
+            >
+              Organization Dashboard
+            </motion.h1>
+            <p className="text-muted-foreground font-medium text-lg mt-1">Manage your active projects and deployments.</p>
+          </div>
+        </div>
+
+        {/* Global Search Bar */}
+        <div className="relative w-full md:w-72">
+          <Search className="absolute left-4 top-3.5 w-5 h-5 text-muted-foreground" />
+          <input
+            type="text"
+            placeholder="Search projects..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full bg-card border border-border rounded-xl pl-12 pr-4 py-3 text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition font-semibold shadow-sm"
+          />
+        </div>
+      </div>
+
+      <div className="grid lg:grid-cols-3 gap-8 items-start">
+        
+        {/* Left Column: Create Project Form (Bento Layout) */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4 }}
+          className="lg:col-span-1 glass-panel rounded-[2rem] p-6 sm:p-8"
+        >
+          <div className="flex items-center gap-3 mb-8">
+            <div className="p-2.5 bg-primary/10 text-primary rounded-xl">
+              <Plus size={20} className="stroke-[3]" />
+            </div>
+            <h2 className="text-xl font-black">New Project</h2>
           </div>
 
-          <button
-            type="submit"
-            disabled={submitting || !pdf}
-            className="w-full bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 px-10 py-5 rounded-2xl font-bold text-lg shadow-xl disabled:opacity-50 transition-all transform hover:scale-[1.02]"
-          >
-            {submitting ? "Creating..." : "Create Project"}
-          </button>
-        </form>
-      </motion.section>
+          <form onSubmit={createProject} className="space-y-6">
+            <div className="space-y-5">
+              <div>
+                <label className="block text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2">Required Team Size</label>
+                <input
+                  type="number"
+                  min="1"
+                  value={form.teamSize}
+                  onChange={(e) => setForm({ ...form, teamSize: +e.target.value })}
+                  className="w-full bg-card border border-border rounded-xl px-4 py-3.5 focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all font-semibold shadow-sm"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2">Load per Person (hrs)</label>
+                <input
+                  type="number"
+                  step="0.1"
+                  min="0.1"
+                  value={form.load}
+                  onChange={(e) => setForm({ ...form, load: +e.target.value })}
+                  className="w-full bg-card border border-border rounded-xl px-4 py-3.5 focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all font-semibold shadow-sm"
+                  required
+                />
+              </div>
+            </div>
 
-      {/* Allocated Projects */}
-      <section className="mb-16">
-        <h2 className="text-3xl font-bold mb-8 flex items-center gap-4">
-          <Play className="w-9 h-9 text-violet-400" />
-          Allocated Projects
-        </h2>
+            <div>
+              <label className="block text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2">Project Brief (PDF)</label>
+              <UploadZone
+                onFile={setPdf}
+                label={pdf ? pdf.name : "Drop PDF here"}
+              />
+            </div>
 
-        {loading ? (
-          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {[...Array(3)].map((_, i) => (
-              <div key={i} className="glass rounded-3xl p-6 h-64 animate-pulse bg-slate-800/50" />
-            ))}
-          </div>
-        ) : allocated.length === 0 ? (
-          <div className="text-center py-16 text-slate-500 text-xl">
-            No projects allocated yet.
-          </div>
-        ) : (
-          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {allocated.map((p) => (
-              <motion.div
-                key={p.id}
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                whileHover={{ scale: 1.03, transition: { duration: 0.2 } }}
-                className="glass rounded-3xl p-6 border border-violet-500/10 hover:border-violet-500/40 transition-all shadow-xl"
-              >
-                <h3 className="text-xl font-semibold mb-4 line-clamp-2 text-white/90 group-hover:text-white transition">
-                  {p.description}
-                </h3>
-                <div className="flex justify-between text-sm mb-6 text-slate-300">
-                  <span>Team: {p.required_team_size}</span>
-                  <span>Load: {p.project_load}h</span>
-                </div>
-                <div className="flex gap-4">
-                  <Link
-                    to={`/projects/${p.id}/team`}
-                    className="flex-1 bg-gradient-to-r from-blue-600/80 to-indigo-600/80 hover:from-blue-500 hover:to-indigo-500 px-6 py-3 rounded-2xl font-medium flex items-center justify-center gap-2 transition-all"
-                  >
-                    <Eye size={18} />
-                    View Team
-                  </Link>
-                  <button
-                    onClick={() => {
-                      if (confirm("Re-allocate this project? This will replace the current team.")) {
-                        api.post(`/projects/${p.id}/allocate`).then(() => {
-                          alert("Re-allocated successfully!");
-                          loadProjects();
-                        }).catch(() => alert("Re-allocation failed"));
-                      }
-                    }}
-                    className="flex-1 bg-gradient-to-r from-amber-600/80 to-orange-600/80 hover:from-amber-500 hover:to-orange-500 px-6 py-3 rounded-2xl font-medium flex items-center justify-center gap-2 transition-all"
-                  >
-                    <RotateCw size={18} />
-                    Re-allocate
-                  </button>
-                </div>
-              </motion.div>
-            ))}
-          </div>
-        )}
-      </section>
+            <button
+              type="submit"
+              disabled={submitting || !pdf}
+              className="w-full bg-primary hover:bg-primary/90 text-primary-foreground px-6 py-4 rounded-xl font-bold shadow-lg shadow-primary/20 hover:shadow-primary/40 disabled:opacity-50 transition-all hover:-translate-y-0.5 mt-2"
+            >
+              {submitting ? "Analyzing..." : "Create Project"}
+            </button>
+          </form>
+        </motion.div>
 
-      {/* Unallocated Projects */}
-      <section>
-        <h2 className="text-3xl font-bold mb-8 flex items-center gap-4">
-          <FolderOpen className="w-9 h-9 text-emerald-400" />
-          Unallocated Projects
-        </h2>
+        {/* Right Column: Project Grid */}
+        <div className="lg:col-span-2 space-y-12">
+          
+          {/* Unallocated Projects Section */}
+          <section>
+            <div className="flex items-center gap-3 mb-6">
+              <div className="p-2 bg-amber-500/10 text-amber-500 rounded-xl">
+                <FolderOpen size={20} className="stroke-[2.5]" />
+              </div>
+              <h2 className="text-xl font-bold">Awaiting Allocation</h2>
+              <span className="ml-2 bg-muted text-foreground text-xs font-black px-3 py-1 rounded-full border border-border">{unallocated.length}</span>
+            </div>
 
-        {loading ? (
-          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {[...Array(3)].map((_, i) => (
-              <div key={i} className="glass rounded-3xl p-6 h-64 animate-pulse bg-slate-800/50" />
-            ))}
-          </div>
-        ) : unallocated.length === 0 ? (
-          <div className="text-center py-16 text-slate-500 text-xl">
-            No unallocated projects yet.
-          </div>
-        ) : (
-          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {unallocated.map((p) => (
-              <motion.div
-                key={p.id}
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                whileHover={{ scale: 1.03, transition: { duration: 0.2 } }}
-                className="glass rounded-3xl p-6 border border-emerald-500/10 hover:border-emerald-500/40 transition-all shadow-xl"
-              >
-                <h3 className="text-xl font-semibold mb-4 line-clamp-2 text-white/90 group-hover:text-white transition">
-                  {p.description}
-                </h3>
-                <div className="flex justify-between text-sm mb-6 text-slate-300">
-                  <span>Team: {p.required_team_size}</span>
-                  <span>Load: {p.project_load}h</span>
-                </div>
-                <Link
-                  to={`/projects/${p.id}/allocate`}
-                  className="w-full bg-gradient-to-r from-violet-600 to-fuchsia-600 hover:from-violet-500 hover:to-fuchsia-500 px-6 py-4 rounded-2xl font-bold text-lg flex items-center justify-center gap-2 transition-all shadow-lg"
-                >
-                  <Play size={20} />
-                  Allocate Team
-                </Link>
-              </motion.div>
-            ))}
-          </div>
-        )}
-      </section>
+            {loading ? (
+              <div className="grid sm:grid-cols-2 gap-5">
+                {[...Array(2)].map((_, i) => (
+                  <div key={i} className="glass-panel rounded-3xl p-6 h-56 animate-pulse bg-muted/20" />
+                ))}
+              </div>
+            ) : unallocated.length === 0 ? (
+              <div className="glass-panel rounded-[2rem] border border-dashed p-12 text-center text-muted-foreground flex flex-col items-center">
+                <FolderOpen size={48} className="mb-4 text-muted-foreground/30" />
+                <p className="font-bold text-xl text-foreground mb-1">
+                  {searchQuery ? "No matching projects" : "No pending projects"}
+                </p>
+                <p className="text-sm font-medium">
+                  {searchQuery ? "Try a different search term." : "Create a new project brief to see it here."}
+                </p>
+              </div>
+            ) : (
+              <div className="grid sm:grid-cols-2 gap-5">
+                <AnimatePresence>
+                  {unallocated.map((p) => (
+                    <motion.div
+                      key={p.id}
+                      layout
+                      initial={{ opacity: 0, scale: 0.9 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      exit={{ opacity: 0, scale: 0.9 }}
+                      whileHover={{ scale: 1.02 }}
+                      className="group glass-panel rounded-3xl p-6 border border-border hover:border-primary/40 transition-all shadow-sm flex flex-col justify-between h-56 relative overflow-hidden bg-card"
+                    >
+                      <div className="absolute top-0 right-0 w-32 h-32 bg-amber-500/10 blur-[50px] rounded-full group-hover:bg-primary/20 transition-colors pointer-events-none"></div>
+                      
+                      <div className="relative z-10">
+                        <h3 className="text-lg font-black mb-4 text-foreground line-clamp-2 leading-snug">
+                          {projectLabel(p.description)}
+                        </h3>
+                        <div className="flex gap-3 text-xs font-bold text-muted-foreground uppercase tracking-wider">
+                          <span className="bg-background border border-border px-3 py-1.5 rounded-lg">Team: {p.required_team_size}</span>
+                          <span className="bg-background border border-border px-3 py-1.5 rounded-lg">Load: {p.project_load}h</span>
+                        </div>
+                      </div>
+
+                      <div className="flex gap-3 mt-4 relative z-10 w-full pt-5 border-t border-border/50">
+                        <Link
+                          to={`/projects/${p.id}/allocate`}
+                          className="flex-1 bg-primary text-primary-foreground hover:bg-primary/90 px-4 py-2.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all shadow-md hover:-translate-y-0.5"
+                        >
+                          <Play size={16} className="fill-current" /> Allocate
+                        </Link>
+                        <button
+                          onClick={() => deleteProject(p.id)}
+                          className="bg-destructive/10 text-destructive hover:bg-destructive hover:text-destructive-foreground px-4 py-2.5 rounded-xl transition-colors shrink-0 flex items-center justify-center"
+                          title="Delete project"
+                        >
+                          <Trash2 size={18} />
+                        </button>
+                      </div>
+                    </motion.div>
+                  ))}
+                </AnimatePresence>
+              </div>
+            )}
+          </section>
+
+          {/* Allocated Projects Section */}
+          <section>
+            <div className="flex items-center gap-3 mb-6">
+              <div className="p-2 bg-emerald-500/10 text-emerald-500 rounded-xl">
+                <Play size={20} className="stroke-[2.5]" />
+              </div>
+              <h2 className="text-xl font-bold">Active Deployments</h2>
+              <span className="ml-2 bg-muted text-foreground text-xs font-black px-3 py-1 rounded-full border border-border">{filteredAllocated.length}</span>
+            </div>
+
+            {loading ? (
+              <div className="grid sm:grid-cols-2 gap-5">
+                {[...Array(2)].map((_, i) => (
+                  <div key={i} className="glass-panel rounded-3xl p-6 h-56 animate-pulse bg-muted/20" />
+                ))}
+              </div>
+            ) : filteredAllocated.length === 0 ? (
+              <div className="glass-panel rounded-[2rem] border border-dashed p-12 text-center text-muted-foreground flex flex-col items-center">
+                <Play size={48} className="mb-4 text-muted-foreground/30" />
+                <p className="font-bold text-xl text-foreground mb-1">
+                  {searchQuery ? "No matching projects" : "No active deployments"}
+                </p>
+                <p className="text-sm font-medium">
+                  {searchQuery ? "Try a different search term." : "Allocate a team to activate a project."}
+                </p>
+              </div>
+            ) : (
+              <div className="grid sm:grid-cols-2 gap-5">
+                <AnimatePresence>
+                  {filteredAllocated.map((p) => (
+                    <motion.div
+                      key={p.id}
+                      layout
+                      initial={{ opacity: 0, scale: 0.9 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      exit={{ opacity: 0, scale: 0.9 }}
+                      whileHover={{ scale: 1.02 }}
+                      className="group glass-panel rounded-3xl p-6 border border-emerald-500/20 hover:border-emerald-500/50 transition-all shadow-sm flex flex-col justify-between h-[280px] relative overflow-hidden bg-card"
+                    >
+                      <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-500/10 blur-[50px] rounded-full group-hover:bg-emerald-500/20 transition-colors pointer-events-none"></div>
+                      
+                      <div className="relative z-10">
+                        <div className="flex items-center gap-2 mb-4">
+                          <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_10px_rgba(16,185,129,0.5)]"></span>
+                          <span className="text-[10px] font-black text-emerald-500 uppercase tracking-widest">Active</span>
+                        </div>
+                        <h3 className="text-lg font-black mb-4 text-foreground line-clamp-2 leading-snug">
+                          {projectLabel(p.description)}
+                        </h3>
+                        <div className="flex gap-3 text-xs font-bold text-muted-foreground uppercase tracking-wider">
+                          <span className="bg-background border border-border px-3 py-1.5 rounded-lg">Team: {p.required_team_size}</span>
+                          <span className="bg-background border border-border px-3 py-1.5 rounded-lg">Load: {p.project_load}h</span>
+                        </div>
+                      </div>
+
+                      <div className="flex gap-2 relative z-10 w-full pt-5 border-t border-border/50 flex-wrap mt-auto">
+                        <Link
+                          to={`/projects/${p.id}/team`}
+                          className="flex-1 min-w-[120px] bg-card text-foreground hover:bg-muted px-3 py-2.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-colors border border-border shadow-sm"
+                        >
+                          <Eye size={16} /> Team
+                        </Link>
+                        <button
+                          onClick={() => navigate(`/projects/${p.id}/allocate`)}
+                          className="flex-1 min-w-[120px] bg-card text-foreground hover:bg-muted px-3 py-2.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-colors border border-border shadow-sm"
+                        >
+                          <RotateCw size={16} /> Re-roll
+                        </button>
+                        <button
+                          onClick={() => deleteProject(p.id)}
+                          className="w-full mt-2 bg-destructive/10 text-destructive hover:bg-destructive hover:text-destructive-foreground px-4 py-2.5 rounded-xl transition-colors flex items-center justify-center font-bold text-sm gap-2"
+                        >
+                          <Trash2 size={16} /> Archive Project
+                        </button>
+                      </div>
+                    </motion.div>
+                  ))}
+                </AnimatePresence>
+              </div>
+            )}
+          </section>
+
+        </div>
+      </div>
     </div>
   );
 }

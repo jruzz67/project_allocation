@@ -4,16 +4,53 @@
 
 @layer base {
   :root {
-    --background: 0 0% 4%;      /* dark bg */
-    --foreground: 0 0% 98%;     /* light text */
+    /* LIGHT MODE - Soft off-white background with pure white cards */
+    --background: 210 40% 98%; 
+    --card: 0 0% 100%;
+    --card-foreground: 222.2 84% 4.9%;
+    --foreground: 222.2 84% 4.9%;
+    
+    --primary: 262.1 83.3% 57.8%;
+    --primary-foreground: 210 40% 98%;
+    
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215.4 16.3% 46.9%;
+    
+    --border: 214.3 31.8% 91.4%;
+    
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
   }
 
-  body {
-    @apply bg-[hsl(var(--background))] text-[hsl(var(--foreground))] min-h-screen antialiased;
+.dark {
+    /* Keep all your other background and card colors the same */
+    --background: 210 34% 13%; 
+    --card: 213 25% 18%; 
+    --card-foreground: 210 40% 98%;
+    --foreground: 210 40% 98%;
+    
+    /* 👇 Change this back to the vibrant, punchy violet */
+    --primary: 262.1 83.3% 57.8%; 
+    --primary-foreground: 210 40% 98%;
+    
+    /* Keep the rest unchanged */
+    --muted: 213 25% 25%; 
+    --muted-foreground: 214 20% 75%;
+    --border: 213 25% 26%; 
+    --destructive: 0 62.8% 45%;
+    --destructive-foreground: 210 40% 98%;
   }
 }
 
-/* Glass effect - define as class so Tailwind generates it */
-.glass {
-  @apply bg-white/5 backdrop-blur-xl border border-white/10 rounded-3xl shadow-2xl;
+@layer base {
+  body {
+    @apply bg-background text-foreground antialiased transition-colors duration-500;
+  }
+}
+
+@layer components {
+  /* The glass panel now uses a slightly transparent card color to let the background subtly bleed through */
+  .glass-panel {
+    @apply bg-card/95 backdrop-blur-2xl border border-border shadow-md transition-all duration-300;
+  }
 }

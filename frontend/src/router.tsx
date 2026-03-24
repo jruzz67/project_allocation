@@ -1,12 +1,4 @@
-import { createBrowserRouter } from "react-router-dom";
-import Dashboard from "./pages/Dashboard";
-import Employees from "./pages/Employees";
-import Projects from "./pages/Projects";
-import AllocationResult from "./pages/AllocationResult";
-
-export const router = createBrowserRouter([
-  { path: "/", element: <Dashboard /> },
-  { path: "/employees", element: <Employees /> },
-  { path: "/projects", element: <Projects /> },
-  { path: "/projects/:id/allocate", element: <AllocationResult /> },
-]);
+// This file is kept for reference only.
+// The actual router is defined directly in App.tsx.
+// All routes use :project_id as the param name (not :id).
+export {};
