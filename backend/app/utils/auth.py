@@ -5,16 +5,27 @@ from fastapi import Depends, HTTPException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlmodel import Session
 import os
+import bcrypt
 
 from ..database import get_session
 from ..models import Organization, Employee
 
-# In production, use a secure random secret key read from env vars.
+# Use raw bcrypt to bypass passlib 72-byte checking bug on bcrypt>=4.0
 SECRET_KEY = os.getenv("JWT_SECRET_KEY", "dev-super-secret-key-change-me")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 1 week
 
 security = HTTPBearer()
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    try:
+        return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password.encode('utf-8'))
+    except Exception:
+        return False
+
+def get_password_hash(password: str) -> str:
+    salt = bcrypt.gensalt()
+    return bcrypt.hashpw(password.encode('utf-8'), salt).decode('utf-8')
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     to_encode = data.copy()

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Form, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Form, UploadFile, File, BackgroundTasks
 from sqlmodel import Session, select
 from sqlalchemy import delete as sa_delete
 from typing import List, Dict
@@ -14,6 +14,8 @@ from ..utils.gemini import generate_tasks, extract_required_skills_from_task
 from ..utils.optimization import allocate_team
 from ..utils.auth import get_current_org
 from ..utils.pdf import parse_pdf
+from ..utils.s3 import upload_file_to_s3, generate_presigned_url
+from ..utils.email import send_allocation_notification
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -43,6 +45,19 @@ async def create_project(
     if len(content) > 10 * 1024 * 1024:
         raise HTTPException(413, "File too large. Maximum size is 10MB.")
         
+    project_title = file.filename.rsplit('.', 1)[0]
+    custom_name = f"{project_title.replace(' ', '_').lower()}_project"
+    
+    # Enforce distinctive project names for the organization
+    existing_proj = session.exec(
+        select(Project).where(
+            Project.organization_id == org.id,
+            Project.document_url.like(f"%{custom_name}%")
+        )
+    ).first()
+    if existing_proj:
+        raise HTTPException(status_code=400, detail="A project with this name already exists. Project names must be distinct.")
+        
     text = parse_pdf(content)
 
     if not text:
@@ -51,17 +66,25 @@ async def create_project(
     embed_text = text[:30000]
     embedding = get_embedding(embed_text)
 
+    # Upload to S3
+    document_url = upload_file_to_s3(content, file.filename, folder="projects", custom_filename=custom_name)
+
     db_project = Project(
         organization_id=org.id,
         description=text,
         required_team_size=required_team_size,
         project_load=project_load,
         embedding=embedding,
+        document_url=document_url,
     )
     session.add(db_project)
     session.commit()
     session.refresh(db_project)
-    return db_project
+    
+    result = ProjectRead.model_validate(db_project)
+    if result.document_url and not result.document_url.startswith("http"):
+        result.document_url = generate_presigned_url(result.document_url)
+    return result
 
 
 # ── List Projects ─────────────────────────────────────────────────────────────
@@ -73,7 +96,23 @@ def get_projects(
     session: Session = Depends(get_session),
     org: Organization = Depends(get_current_org)
 ):
-    return session.exec(select(Project).where(Project.organization_id == org.id).offset(skip).limit(limit)).all()
+    projects = session.exec(select(Project).where(Project.organization_id == org.id).offset(skip).limit(limit)).all()
+    results = []
+    for p in projects:
+        p_read = ProjectRead.model_validate(p)
+        if p_read.document_url and not p_read.document_url.startswith("http"):
+            p_read.document_url = generate_presigned_url(p_read.document_url)
+            
+        allocs = session.exec(select(Allocation.is_final).where(Allocation.project_id == p.id)).all()
+        if not allocs:
+            p_read.status = "Unallocated"
+        elif all(is_final for is_final in allocs):
+            p_read.status = "Active"
+        else:
+            p_read.status = "Pending Review"
+            
+        results.append(p_read)
+    return results
 
 
 @router.get("/allocated", response_model=List[ProjectRead])
@@ -84,7 +123,15 @@ def get_allocated_projects(
     stmt = select(Project).where(
         Project.id.in_(select(Allocation.project_id).distinct())
     ).where(Project.organization_id == org.id)
-    return session.exec(stmt).all()
+    
+    projects = session.exec(stmt).all()
+    results = []
+    for p in projects:
+        p_read = ProjectRead.model_validate(p)
+        if p_read.document_url and not p_read.document_url.startswith("http"):
+            p_read.document_url = generate_presigned_url(p_read.document_url)
+        results.append(p_read)
+    return results
 
 
 # ── Delete Project ─────────────────────────────────────────────────────────────
@@ -168,6 +215,7 @@ def get_project_team(
             "workload_after": alloc.workload_after,
             "matched_skills": matched,
             "missing_skills": missing,
+            "is_final": alloc.is_final,
         })
     return result
 
@@ -185,11 +233,13 @@ def allocate_team_endpoint(
         raise HTTPException(404, "Project not found")
 
     # Restore workloads flush
+    # Restore workloads ONLY if existing allocations were final
     existing = session.exec(select(Allocation).where(Allocation.project_id == project_id)).all()
     for a in existing:
-        emp = session.get(Employee, a.employee_id)
-        if emp:
-            emp.current_workload = max(0.0, round(emp.current_workload - project.project_load, 2))
+        if a.is_final:
+            emp = session.get(Employee, a.employee_id)
+            if emp:
+                emp.current_workload = max(0.0, round(emp.current_workload - project.project_load, 2))
 
     session.flush()
 
@@ -257,9 +307,9 @@ def allocate_team_endpoint(
     for member in result["selected_team"]:
         emp_id = member.get("employee_id")
         emp = session.get(Employee, emp_id)
-        if emp:
-            session.refresh(emp)
-            emp.current_workload = float(member["workload_after"])
+        
+        # We NO LONGER update current_workload during draft creation!
+        # Handled in the approve endpoint.
 
         allocation = Allocation(
             project_id=project_id,
@@ -271,6 +321,7 @@ def allocate_team_endpoint(
             workload_after=float(member["workload_after"]),
             matched_skills=json.dumps(member.get("matched_skills", [])),
             missing_skills=json.dumps(member.get("missing_skills", [])),
+            is_final=False,  # Set explicitly as Draft
         )
         session.add(allocation)
 
@@ -283,3 +334,69 @@ def allocate_team_endpoint(
         workload_std=result.get("workload_std"),
         tasks_generated=len(task_objs),
     )
+
+
+@router.post("/{project_id}/allocate/approve")
+def approve_allocation(
+    project_id: int, 
+    background_tasks: BackgroundTasks,
+    session: Session = Depends(get_session),
+    org: Organization = Depends(get_current_org)
+):
+    project = session.get(Project, project_id)
+    if not project or project.organization_id != org.id:
+        raise HTTPException(404, "Project not found")
+
+    allocs = session.exec(select(Allocation).where(Allocation.project_id == project_id)).all()
+    if not allocs:
+        raise HTTPException(404, "No allocation found to approve")
+
+    already_final = all(a.is_final for a in allocs)
+    if already_final:
+        return {"status": "success", "message": "Allocation is already finalized"}
+
+    for alloc in allocs:
+        if not alloc.is_final:
+            emp = session.get(Employee, alloc.employee_id)
+            if emp:
+                emp.current_workload = alloc.workload_after
+                # Queue assignment email
+                background_tasks.add_task(
+                    send_allocation_notification,
+                    to_email=emp.email,
+                    project_id=project_id,
+                    role=alloc.role,
+                    description=alloc.task_description
+                )
+            alloc.is_final = True
+            session.add(alloc)
+
+    session.commit()
+    return {"status": "success", "message": "Allocation approved and workloads updated!"}
+
+
+@router.post("/{project_id}/allocate/reject")
+def reject_allocation(
+    project_id: int, 
+    session: Session = Depends(get_session),
+    org: Organization = Depends(get_current_org)
+):
+    project = session.get(Project, project_id)
+    if not project or project.organization_id != org.id:
+        raise HTTPException(404, "Project not found")
+
+    allocs = session.exec(select(Allocation).where(Allocation.project_id == project_id)).all()
+    
+    # Revert workloads if they were finalized
+    for alloc in allocs:
+        if alloc.is_final:
+            emp = session.get(Employee, alloc.employee_id)
+            if emp:
+                emp.current_workload = max(0.0, round(emp.current_workload - project.project_load, 2))
+                
+    session.flush()
+    session.exec(sa_delete(Allocation).where(Allocation.project_id == project_id))
+    session.exec(sa_delete(Task).where(Task.project_id == project_id))
+    session.commit()
+    
+    return {"status": "success", "message": "Draft allocation successfully rejected"}

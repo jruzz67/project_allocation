@@ -12,6 +12,7 @@ interface Project {
   description: string;
   required_team_size: number;
   project_load: number;
+  status?: string;
 }
 
 function projectLabel(description: string, maxLen = 60): string {
@@ -23,26 +24,41 @@ function projectLabel(description: string, maxLen = 60): string {
 export default function Projects() {
   const navigate = useNavigate();
   const [allProjects, setAllProjects] = useState<Project[]>([]);
-  const [allocated, setAllocated] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [form, setForm] = useState({ teamSize: 5, load: 10 });
   const [pdf, setPdf] = useState<File | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [skip, setSkip] = useState(0);
+  const [hasMore, setHasMore] = useState(true);
+  const LIMIT = 6;
 
   useEffect(() => {
-    loadProjects();
+    loadProjects(true);
   }, []);
 
-  const loadProjects = async () => {
-    setLoading(true);
+  const loadProjects = async (reset = false) => {
+    const currentSkip = reset ? 0 : skip;
     try {
-      const [all, alloc] = await Promise.all([
-        api.get("/projects"),
-        api.get("/projects/allocated"),
-      ]);
-      setAllProjects(all.data);
-      setAllocated(alloc.data);
+      const all = await api.get(`/projects?skip=${currentSkip}&limit=${LIMIT}`);
+      
+      if (all.data.length < LIMIT) {
+        setHasMore(false);
+      } else {
+        setHasMore(true);
+      }
+
+      if (reset) {
+        setAllProjects(all.data);
+      } else {
+        setAllProjects(prev => {
+          const existingIds = new Set(prev.map(p => p.id));
+          const newProjs = all.data.filter((p: Project) => !existingIds.has(p.id));
+          return [...prev, ...newProjs];
+        });
+      }
+      
+      setSkip(currentSkip + LIMIT);
     } catch {
       toast.error("Failed to load projects");
     } finally {
@@ -69,7 +85,7 @@ export default function Projects() {
       toast.success("Project created successfully!", { id: toastId });
       setForm({ teamSize: 5, load: 10 });
       setPdf(null);
-      loadProjects();
+      loadProjects(true);
     } catch {
       toast.error("Failed to create project", { id: toastId });
     } finally {
@@ -80,11 +96,9 @@ export default function Projects() {
   const deleteProject = (projectId: number) => {
     // 1. Save current states
     const previousAll = [...allProjects];
-    const previousAllocated = [...allocated];
     
     // 2. Optimistic UI Update (Instant removal)
     setAllProjects(allProjects.filter(p => p.id !== projectId));
-    setAllocated(allocated.filter(p => p.id !== projectId));
 
     // 3. Start 5-second timer
     const timeoutId = setTimeout(async () => {
@@ -93,7 +107,6 @@ export default function Projects() {
       } catch (err: any) {
         toast.error("Failed to delete project. Restoring...");
         setAllProjects(previousAll);
-        setAllocated(previousAllocated);
       }
     }, 5000);
 
@@ -109,7 +122,6 @@ export default function Projects() {
             onClick={() => {
               clearTimeout(timeoutId); // Cancel deletion
               setAllProjects(previousAll); // Put it back
-              setAllocated(previousAllocated);
               toast.dismiss(t.id);
             }}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-primary/10 text-primary hover:bg-primary hover:text-primary-foreground rounded-lg font-bold text-sm transition-colors"
@@ -124,11 +136,9 @@ export default function Projects() {
 
   // Derived states with search filter applied
   const filteredAll = allProjects.filter(p => projectLabel(p.description).toLowerCase().includes(searchQuery.toLowerCase()));
-  const filteredAllocated = allocated.filter(p => projectLabel(p.description).toLowerCase().includes(searchQuery.toLowerCase()));
-  
-  const unallocated = filteredAll.filter(
-    (p) => !filteredAllocated.some((a) => a.id === p.id)
-  );
+  const unallocated = filteredAll.filter((p) => p.status === "Unallocated");
+  const pendingReview = filteredAll.filter((p) => p.status === "Pending Review");
+  const activeDeployments = filteredAll.filter((p) => p.status === "Active");
 
   return (
     <div className="p-6 md:p-10 max-w-7xl mx-auto space-y-12">
@@ -299,6 +309,84 @@ export default function Projects() {
                 </AnimatePresence>
               </div>
             )}
+
+            {hasMore && !loading && unallocated.length > 0 && (
+              <div className="flex justify-center mt-10 w-full mb-8">
+                <button 
+                  onClick={() => {
+                    setLoading(true);
+                    loadProjects(false);
+                  }}
+                  className="bg-card hover:bg-muted text-foreground px-8 py-3.5 rounded-xl font-bold transition-all border border-border shadow-sm flex items-center gap-2 hover:-translate-y-0.5"
+                >
+                  Load More Pending Projects...
+                </button>
+              </div>
+            )}
+          </section>
+
+          {/* Pending Review Section */}
+          <section>
+            <div className="flex items-center gap-3 mb-6">
+              <div className="p-2 bg-purple-500/10 text-purple-500 rounded-xl">
+                <RotateCw size={20} className="stroke-[2.5]" />
+              </div>
+              <h2 className="text-xl font-bold">Pending Review</h2>
+              <span className="ml-2 bg-muted text-foreground text-xs font-black px-3 py-1 rounded-full border border-border">{pendingReview.length}</span>
+            </div>
+
+            {loading ? (
+              <div className="grid sm:grid-cols-2 gap-5">
+                {[...Array(2)].map((_, i) => (
+                  <div key={i} className="glass-panel rounded-3xl p-6 h-56 animate-pulse bg-muted/20" />
+                ))}
+              </div>
+            ) : pendingReview.length === 0 ? (
+              <div className="hidden"></div>
+            ) : (
+              <div className="grid sm:grid-cols-2 gap-5 mb-10">
+                <AnimatePresence>
+                  {pendingReview.map((p) => (
+                    <motion.div
+                      key={p.id}
+                      layout
+                      initial={{ opacity: 0, scale: 0.9 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      exit={{ opacity: 0, scale: 0.9 }}
+                      whileHover={{ scale: 1.02 }}
+                      className="group glass-panel rounded-3xl p-6 border border-purple-500/30 hover:border-purple-500/60 transition-all shadow-sm flex flex-col justify-between h-[260px] relative overflow-hidden bg-card"
+                    >
+                      <div className="absolute top-0 right-0 w-32 h-32 bg-purple-500/10 blur-[50px] rounded-full group-hover:bg-purple-500/20 transition-colors pointer-events-none"></div>
+                      
+                      <div className="relative z-10">
+                        <div className="flex items-center gap-2 mb-4">
+                          <span className="w-2.5 h-2.5 rounded-full bg-purple-500 animate-pulse shadow-[0_0_10px_rgba(168,85,247,0.5)]"></span>
+                          <span className="text-[10px] font-black text-purple-500 uppercase tracking-widest">Awaiting Approval</span>
+                        </div>
+                        <h3 className="text-lg font-black mb-4 text-foreground line-clamp-2 leading-snug">
+                          {projectLabel(p.description)}
+                        </h3>
+                      </div>
+
+                      <div className="flex flex-col gap-2 relative z-10 w-full pt-4 border-t border-border/50">
+                        <Link
+                          to={`/projects/${p.id}/allocate`}
+                          className="w-full bg-purple-500 text-white hover:bg-purple-600 px-4 py-2.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all shadow-md hover:-translate-y-0.5"
+                        >
+                          <Eye size={16} /> Review Allocation
+                        </Link>
+                        <button
+                          onClick={() => deleteProject(p.id)}
+                          className="w-full bg-destructive/10 text-destructive hover:bg-destructive hover:text-destructive-foreground px-4 py-2.5 rounded-xl transition-colors shrink-0 flex items-center justify-center font-bold text-sm"
+                        >
+                          <Trash2 size={16} className="mr-2"/> Discard
+                        </button>
+                      </div>
+                    </motion.div>
+                  ))}
+                </AnimatePresence>
+              </div>
+            )}
           </section>
 
           {/* Allocated Projects Section */}
@@ -308,7 +396,7 @@ export default function Projects() {
                 <Play size={20} className="stroke-[2.5]" />
               </div>
               <h2 className="text-xl font-bold">Active Deployments</h2>
-              <span className="ml-2 bg-muted text-foreground text-xs font-black px-3 py-1 rounded-full border border-border">{filteredAllocated.length}</span>
+              <span className="ml-2 bg-muted text-foreground text-xs font-black px-3 py-1 rounded-full border border-border">{activeDeployments.length}</span>
             </div>
 
             {loading ? (
@@ -317,20 +405,20 @@ export default function Projects() {
                   <div key={i} className="glass-panel rounded-3xl p-6 h-56 animate-pulse bg-muted/20" />
                 ))}
               </div>
-            ) : filteredAllocated.length === 0 ? (
+            ) : activeDeployments.length === 0 ? (
               <div className="glass-panel rounded-[2rem] border border-dashed p-12 text-center text-muted-foreground flex flex-col items-center">
                 <Play size={48} className="mb-4 text-muted-foreground/30" />
                 <p className="font-bold text-xl text-foreground mb-1">
                   {searchQuery ? "No matching projects" : "No active deployments"}
                 </p>
                 <p className="text-sm font-medium">
-                  {searchQuery ? "Try a different search term." : "Allocate a team to activate a project."}
+                  {searchQuery ? "Try a different search term." : "Approve an allocation to activate a project."}
                 </p>
               </div>
             ) : (
               <div className="grid sm:grid-cols-2 gap-5">
                 <AnimatePresence>
-                  {filteredAllocated.map((p) => (
+                  {activeDeployments.map((p) => (
                     <motion.div
                       key={p.id}
                       layout

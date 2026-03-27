@@ -12,6 +12,7 @@ export default function AuthPage() {
   const [role, setRole] = useState<"org" | "employee">("org");
   const [loading, setLoading] = useState(false);
   const [emailError, setEmailError] = useState(false);
+  const [passwordError, setPasswordError] = useState("");
   const navigate = useNavigate();
   const { login } = useAuth();
 
@@ -25,6 +26,18 @@ export default function AuthPage() {
     e.preventDefault();
     setLoading(true);
     setEmailError(false);
+    setPasswordError("");
+
+    if (formData.password.length < 6) {
+      setPasswordError("Password must be at least 6 characters");
+      setLoading(false);
+      return;
+    }
+    if (formData.password.length > 71) {
+      setPasswordError("Password must not exceed 71 characters");
+      setLoading(false);
+      return;
+    }
 
     try {
       if (isLogin) {
@@ -98,7 +111,7 @@ export default function AuthPage() {
             <div className="flex bg-muted/30 p-1.5 rounded-2xl mb-8 border border-border shadow-inner">
               <button
                 type="button"
-                onClick={() => { setRole("org"); setEmailError(false); }}
+                onClick={() => { setRole("org"); setEmailError(false); setPasswordError(""); }}
                 className={cn(
                   "flex-1 py-3 rounded-xl text-sm font-bold transition-all flex items-center justify-center gap-2",
                   role === "org" 
@@ -110,7 +123,7 @@ export default function AuthPage() {
               </button>
               <button
                 type="button"
-                onClick={() => { setRole("employee"); setEmailError(false); }}
+                onClick={() => { setRole("employee"); setEmailError(false); setPasswordError(""); }}
                 className={cn(
                   "flex-1 py-3 rounded-xl text-sm font-bold transition-all flex items-center justify-center gap-2",
                   role === "employee" 
@@ -169,20 +182,26 @@ export default function AuthPage() {
               </div>
             </motion.div>
 
-            <div>
-              <label className="block text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2">Password</label>
+            <motion.div animate={passwordError ? { x: [-5, 5, -5, 5, 0] } : {}} transition={{ duration: 0.3 }}>
+              <label className="block text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2 flex justify-between">
+                Password
+                {passwordError && <span className="text-destructive flex items-center gap-1"><AlertCircle size={12}/> {passwordError}</span>}
+              </label>
               <div className="relative">
-                <Lock className="absolute left-4 top-3.5 w-5 h-5 text-muted-foreground" />
+                <Lock className={cn("absolute left-4 top-3.5 w-5 h-5 transition-colors", passwordError ? "text-destructive" : "text-muted-foreground")} />
                 <input
                   type="password"
                   required
                   value={formData.password}
-                  onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                  className="w-full bg-card border border-border rounded-xl px-12 py-3.5 text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all font-semibold shadow-sm"
+                  onChange={(e) => { setFormData({ ...formData, password: e.target.value }); setPasswordError(""); }}
+                  className={cn(
+                    "w-full bg-card border rounded-xl px-12 py-3.5 text-foreground focus:outline-none focus:ring-2 transition-all font-semibold shadow-sm",
+                    passwordError ? "border-destructive focus:ring-destructive/50" : "border-border focus:ring-primary/50 focus:border-primary"
+                  )}
                   placeholder="••••••••"
                 />
               </div>
-            </div>
+            </motion.div>
 
             <button
               type="submit"
@@ -205,6 +224,7 @@ export default function AuthPage() {
                 setRole("org"); 
                 setFormData({ name: "", email: "", password: "" });
                 setEmailError(false);
+                setPasswordError("");
               }}
               className="text-muted-foreground hover:text-foreground font-bold text-sm transition-colors border-b border-transparent hover:border-foreground pb-0.5"
             >

@@ -22,16 +22,38 @@ export default function Employees() {
   const [loading, setLoading] = useState(true);
   const [form, setForm] = useState({ email: "", password: "" });
   const [submitting, setSubmitting] = useState(false);
+  const [passwordError, setPasswordError] = useState("");
   const [isFormOpen, setIsFormOpen] = useState(false); // New state for accordion
+  const [skip, setSkip] = useState(0);
+  const [hasMore, setHasMore] = useState(true);
+  const LIMIT = 6;
 
   useEffect(() => {
-    fetchEmployees();
+    fetchEmployees(true);
   }, []);
 
-  const fetchEmployees = async () => {
+  const fetchEmployees = async (reset = false) => {
+    const currentSkip = reset ? 0 : skip;
     try {
-      const res = await api.get("/employees");
-      setEmployees(res.data);
+      const res = await api.get(`/employees?skip=${currentSkip}&limit=${LIMIT}`);
+      
+      if (res.data.length < LIMIT) {
+        setHasMore(false);
+      } else {
+        setHasMore(true);
+      }
+
+      if (reset) {
+        setEmployees(res.data);
+      } else {
+        setEmployees(prev => {
+          // Prevent duplicates in development React StrictMode
+          const existingIds = new Set(prev.map(e => e.id));
+          const newEmps = res.data.filter((e: Employee) => !existingIds.has(e.id));
+          return [...prev, ...newEmps];
+        });
+      }
+      setSkip(currentSkip + LIMIT);
     } catch {
       toast.error("Failed to fetch employees");
     } finally {
@@ -41,6 +63,17 @@ export default function Employees() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setPasswordError("");
+    
+    if (form.password.length < 6) {
+      setPasswordError("Password must be at least 6 characters");
+      return;
+    }
+    if (form.password.length > 71) {
+      setPasswordError("Password must not exceed 71 characters");
+      return;
+    }
+
     setSubmitting(true);
     
     const toastId = toast.loading(`Inviting ${form.email}...`);
@@ -52,7 +85,7 @@ export default function Employees() {
       toast.success(`Account created for ${form.email}`, { id: toastId });
       setForm({ email: "", password: "" });
       setIsFormOpen(false); // Automatically close form on success
-      fetchEmployees();
+      fetchEmployees(true);
     } catch (err: any) {
       const msg = err.response?.data?.detail || "Failed to add employee";
       toast.error(msg, { id: toastId });
@@ -191,14 +224,20 @@ export default function Employees() {
                   </div>
                   
                   <div className="flex-1 w-full">
-                    <label className="block text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2">Initial Password</label>
+                    <label className="block text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2 flex justify-between">
+                      Initial Password
+                      {passwordError && <span className="text-destructive flex items-center gap-1"><AlertCircle size={12}/> {passwordError}</span>}
+                    </label>
                     <div className="relative">
-                      <Lock className="absolute left-4 top-3.5 w-5 h-5 text-muted-foreground" />
+                      <Lock className={cn("absolute left-4 top-3.5 w-5 h-5 transition-colors", passwordError ? "text-destructive" : "text-muted-foreground")} />
                       <input
                         type="text"
                         value={form.password}
-                        onChange={(e) => setForm({ ...form, password: e.target.value })}
-                        className="w-full bg-background border border-border rounded-xl pl-12 pr-4 py-3.5 text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition font-semibold shadow-sm"
+                        onChange={(e) => { setForm({ ...form, password: e.target.value }); setPasswordError(""); }}
+                        className={cn(
+                          "w-full bg-background border rounded-xl pl-12 pr-4 py-3.5 text-foreground focus:outline-none focus:ring-2 transition font-semibold shadow-sm",
+                          passwordError ? "border-destructive focus:ring-destructive/50" : "border-border focus:ring-primary/50 focus:border-primary"
+                        )}
                         placeholder="temporary123"
                         required
                       />
@@ -346,6 +385,20 @@ export default function Employees() {
                 );
               })}
             </AnimatePresence>
+          </div>
+        )}
+        
+        {hasMore && !loading && filteredEmployees.length > 0 && (
+          <div className="flex justify-center mt-12 w-full">
+            <button 
+              onClick={() => {
+                setLoading(true);
+                fetchEmployees(false);
+              }}
+              className="bg-card hover:bg-muted text-foreground px-8 py-3.5 rounded-xl font-bold transition-all border border-border shadow-sm flex items-center gap-2 hover:-translate-y-0.5"
+            >
+              Load More...
+            </button>
           </div>
         )}
       </div>

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useParams, Link } from "react-router-dom";
+import { useParams, Link, useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
 import { CheckCircle2, AlertCircle, RotateCw, Eye, ArrowLeft, BrainCircuit, Activity, Users, Target, Briefcase } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
@@ -14,6 +14,7 @@ interface TeamMember {
   workload_after: number;
   matched_skills: string[];
   missing_skills: string[];
+  is_final: boolean;
 }
 
 interface AllocationResponse {
@@ -28,18 +29,44 @@ interface AllocationResponse {
 export default function AllocatePage() {
   const { project_id } = useParams<{ project_id: string }>();
 
+  const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [generationComplete, setGenerationComplete] = useState(false);
   const [loadingStep, setLoadingStep] = useState(0);
   const [result, setResult] = useState<AllocationResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    allocateTeam();
+    checkExistingTeam();
   }, [project_id]);
+
+  const checkExistingTeam = async () => {
+    setLoading(true);
+    try {
+      const res = await api.get(`/projects/${project_id}/team`);
+      if (res.data && res.data.length > 0) {
+        // Exists! Assemble mock AllocationResponse for display
+        setResult({
+          status: "success",
+          selected_team: res.data,
+          avg_similarity: res.data.reduce((acc: number, curr: any) => acc + curr.similarity, 0) / res.data.length,
+          workload_std: 0,
+          tasks_generated: res.data.length,
+        });
+        setLoading(false);
+      } else {
+        allocateTeam();
+      }
+    } catch (err: any) {
+      // If 404, we must generate a new team
+      allocateTeam();
+    }
+  };
 
   useEffect(() => {
     let interval: ReturnType<typeof setInterval>;
-    if (loading) {
+    if (loading || isGenerating) {
       interval = setInterval(() => {
         setLoadingStep((prev) => (prev < 4 ? prev + 1 : prev));
       }, 2500);
@@ -47,21 +74,53 @@ export default function AllocatePage() {
       setLoadingStep(0);
     }
     return () => clearInterval(interval);
-  }, [loading]);
+  }, [loading, isGenerating]);
 
   const allocateTeam = async () => {
-    setLoading(true);
+    setIsGenerating(true);
     setLoadingStep(0);
     setError(null);
     setResult(null);
     try {
       const res = await api.post(`/projects/${project_id}/allocate`);
       setResult(res.data);
+      if (res.data.status === "success" && !res.data.selected_team?.[0]?.is_final) {
+        setGenerationComplete(true);
+        setTimeout(() => {
+          navigate("/projects");
+        }, 3000);
+      }
     } catch (err: any) {
       console.error("Allocation failed:", err);
       setError(err.response?.data?.detail || "Failed to allocate team");
     } finally {
+      setIsGenerating(false);
       setLoading(false);
+    }
+  };
+
+  const approveTeam = async () => {
+    try {
+      await api.post(`/projects/${project_id}/allocate/approve`);
+      // Update local state to reflect final
+      setResult((prev) => prev ? {
+        ...prev,
+        selected_team: prev.selected_team?.map(m => ({ ...m, is_final: true }))
+      } : prev);
+      alert("Team officially assigned and workloads updated!");
+      navigate("/projects");
+    } catch (err: any) {
+      alert(err.response?.data?.detail || "Failed to approve team");
+    }
+  };
+
+  const rejectTeam = async () => {
+    try {
+      await api.post(`/projects/${project_id}/allocate/reject`);
+      // Navigate away or re-generate
+      allocateTeam();
+    } catch (err: any) {
+      alert(err.response?.data?.detail || "Failed to reject team");
     }
   };
 
@@ -73,7 +132,7 @@ export default function AllocatePage() {
     { text: "Finalizing allocations...", icon: <CheckCircle2 className="w-6 h-6" /> }
   ];
 
-  if (loading) {
+  if (loading || isGenerating) {
     return (
       <div className="min-h-[80vh] flex flex-col items-center justify-center p-6 relative overflow-hidden">
         {/* Magical Background Glow */}
@@ -122,6 +181,29 @@ export default function AllocatePage() {
     );
   }
 
+  if (generationComplete) {
+    return (
+      <div className="min-h-[80vh] flex flex-col items-center justify-center p-6 relative overflow-hidden">
+        <motion.div 
+          initial={{ scale: 0.5, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          className="glass-panel p-12 rounded-[3rem] flex flex-col items-center text-center relative z-10 max-w-lg border border-emerald-500/30 shadow-2xl"
+        >
+          <div className="w-24 h-24 bg-emerald-500/10 rounded-full flex items-center justify-center mb-6">
+            <CheckCircle2 className="w-12 h-12 text-emerald-500" />
+          </div>
+          <h2 className="text-3xl font-black mb-4">Allocation Completed!</h2>
+          <p className="text-muted-foreground text-lg mb-8">
+            The AI has successfully generated a team draft. Waiting for your manual review...
+          </p>
+          <div className="flex items-center gap-2 text-primary font-bold animate-pulse">
+            <RotateCw size={18} className="animate-spin" /> Redirecting to dashboard...
+          </div>
+        </motion.div>
+      </div>
+    );
+  }
+
   if (error) {
     return (
       <div className="min-h-[60vh] flex flex-col items-center justify-center p-6 text-center">
@@ -154,6 +236,8 @@ export default function AllocatePage() {
     );
   }
 
+  const isFinal = result.selected_team && result.selected_team.length > 0 ? result.selected_team[0].is_final : false;
+
   return (
     <div className="p-6 md:p-10 max-w-7xl mx-auto space-y-12">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
@@ -171,22 +255,37 @@ export default function AllocatePage() {
                 animate={{ opacity: 1, x: 0 }}
                 className="text-3xl md:text-5xl font-black tracking-tight text-foreground"
               >
-                Allocation Complete
+                {isFinal ? "Allocation Finalized" : "Draft Allocation"}
               </motion.h1>
               <p className="text-muted-foreground font-medium text-lg mt-1">
-                Successfully formed a team for Project #{project_id}
+                {isFinal 
+                  ? `Successfully deployed team for Project #${project_id}` 
+                  : `Needs review before workloads are updated for Project #${project_id}`}
               </p>
             </div>
           </div>
         </div>
 
         <div className="flex gap-3">
-          <button onClick={() => allocateTeam()} className="bg-card hover:bg-muted text-foreground px-5 py-3 rounded-xl font-bold flex items-center gap-2 transition-colors border border-border shadow-sm">
-            <RotateCw size={18} /> Re-roll
-          </button>
-          <Link to={`/projects/${project_id}/team`} className="bg-primary hover:bg-primary/90 text-primary-foreground px-6 py-3 rounded-xl font-bold flex items-center gap-2 transition-all shadow-lg shadow-primary/20 hover:-translate-y-0.5">
-            <Eye size={18} /> View Team
-          </Link>
+          {!isFinal ? (
+            <>
+              <button onClick={() => rejectTeam()} className="bg-destructive/10 hover:bg-destructive/20 text-destructive px-5 py-3 rounded-xl font-bold flex items-center gap-2 transition-colors border border-destructive/20 shadow-sm">
+                <RotateCw size={18} /> Reject & Re-roll
+              </button>
+              <button onClick={() => approveTeam()} className="bg-emerald-500 hover:bg-emerald-600 text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2 transition-all shadow-lg shadow-emerald-500/20 hover:-translate-y-0.5">
+                <CheckCircle2 size={18} /> Approve Team
+              </button>
+            </>
+          ) : (
+            <>
+              <button onClick={() => allocateTeam()} className="bg-card hover:bg-muted text-foreground px-5 py-3 rounded-xl font-bold flex items-center gap-2 transition-colors border border-border shadow-sm">
+                <RotateCw size={18} /> Re-roll New Draft
+              </button>
+              <Link to={`/projects/${project_id}/team`} className="bg-primary hover:bg-primary/90 text-primary-foreground px-6 py-3 rounded-xl font-bold flex items-center gap-2 transition-all shadow-lg shadow-primary/20 hover:-translate-y-0.5">
+                <Eye size={18} /> View Active Team
+              </Link>
+            </>
+          )}
         </div>
       </div>
 

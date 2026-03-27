@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Form, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Form, UploadFile, File, BackgroundTasks
 from sqlmodel import Session, select
 from typing import List
 import json
@@ -8,8 +8,10 @@ from ..models import Employee, Organization, Allocation
 from ..schemas import EmployeeRead, EmployeeSignupByOrg
 from ..utils.embedding import get_embedding
 from ..utils.gemini import extract_skills_from_resume
-from ..utils.auth import get_current_org, get_current_employee
+from ..utils.auth import get_current_org, get_current_employee, get_password_hash
 from ..utils.pdf import parse_pdf
+from ..utils.s3 import upload_file_to_s3, generate_presigned_url
+from ..utils.email import send_employee_invite_email
 
 router = APIRouter(prefix="/employees", tags=["employees"])
 
@@ -18,6 +20,7 @@ router = APIRouter(prefix="/employees", tags=["employees"])
 @router.post("", response_model=EmployeeRead)
 def create_employee_placeholder(
     data: EmployeeSignupByOrg,
+    background_tasks: BackgroundTasks,
     session: Session = Depends(get_session),
     org: Organization = Depends(get_current_org)
 ):
@@ -30,12 +33,21 @@ def create_employee_placeholder(
     db_employee = Employee(
         organization_id=org.id,
         email=data.email,
-        password=data.password,
+        hashed_password=get_password_hash(data.password),
         is_setup_complete=False
     )
     session.add(db_employee)
     session.commit()
     session.refresh(db_employee)
+    
+    # Send invitation email in the background
+    background_tasks.add_task(
+        send_employee_invite_email,
+        to_email=db_employee.email,
+        temp_password=data.password,
+        org_name=org.name
+    )
+
     return db_employee
 
 @router.get("", response_model=List[EmployeeRead])
@@ -47,7 +59,15 @@ def get_employees(
 ):
     """Organization lists all its employees."""
     stmt = select(Employee).where(Employee.organization_id == org.id).offset(skip).limit(limit)
-    return session.exec(stmt).all()
+    employees = session.exec(stmt).all()
+    
+    results = []
+    for emp in employees:
+        emp_read = EmployeeRead.model_validate(emp)
+        if emp_read.resume_url and not emp_read.resume_url.startswith("http"):
+            emp_read.resume_url = generate_presigned_url(emp_read.resume_url)
+        results.append(emp_read)
+    return results
 
 @router.delete("/{employee_id}")
 def delete_employee(
@@ -101,17 +121,25 @@ async def complete_employee_setup(
     skills_list = extract_skills_from_resume(text)
     skills_json = json.dumps(skills_list) if skills_list else None
 
+    # Upload resume to S3
+    custom_name = f"{name.replace(' ', '_').lower()}_resume"
+    resume_url = upload_file_to_s3(content, file.filename, folder="resumes", custom_filename=custom_name)
+
     # Update employee record
     emp.name = name
     emp.capacity = capacity
-    emp.password = new_password
+    emp.hashed_password = get_password_hash(new_password)
     emp.description = text
     emp.embedding = embedding
     emp.skills = skills_json
+    emp.resume_url = resume_url
     emp.is_setup_complete = True
     
     session.add(emp)
     session.commit()
     session.refresh(emp)
     
-    return emp
+    result = EmployeeRead.model_validate(emp)
+    if result.resume_url and not result.resume_url.startswith("http"):
+        result.resume_url = generate_presigned_url(result.resume_url)
+    return result

@@ -87,11 +87,7 @@ Strict rules:
             error_str = str(e)
             print(f"[ERROR] API key {idx} failed: {error_str}")
             last_error = e
-            if "429" in error_str or "quota" in error_str.lower() or "RESOURCE_EXHAUSTED" in error_str:
-                print(f"[INFO] Quota error on key {idx} — trying next key...")
-                continue
-            else:
-                break
+            continue
 
     raise RuntimeError(f"All {len(API_KEYS)} API keys failed. Last error: {last_error}")
 
@@ -150,10 +146,7 @@ JSON array only.
             error_str = str(e)
             print(f"[SKILL ERROR] Key {idx} failed: {error_str}")
             last_error = e
-            if "429" in error_str or "quota" in error_str.lower() or "RESOURCE_EXHAUSTED" in error_str:
-                continue
-            else:
-                break
+            continue
 
     print("[SKILL] All keys failed for skill extraction — returning []")
     return []
@@ -198,9 +191,7 @@ JSON array only.
         except Exception as e:
             error_str = str(e)
             print(f"[TASK SKILL ERROR] Key {idx} failed: {error_str}")
-            if "429" in error_str or "quota" in error_str.lower() or "RESOURCE_EXHAUSTED" in error_str:
-                continue
-            break
+            continue
 
     print(f"[TASK SKILL] All keys failed for role '{role}' — using fallback skills")
     # Generic fallback so chips are never empty. Covers most software roles.

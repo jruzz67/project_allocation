@@ -5,7 +5,7 @@ from datetime import timedelta
 from ..database import get_session
 from ..models import Organization, Employee
 from ..schemas import Token, LoginRequest, OrgSignupRequest
-from ..utils.auth import create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES
+from ..utils.auth import create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES, get_password_hash, verify_password
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -21,7 +21,7 @@ def signup_org(data: OrgSignupRequest, session: Session = Depends(get_session)):
     org = Organization(
         name=data.name,
         email=data.email,
-        password=data.password  # Storing as plaintext per explicit requirement
+        hashed_password=get_password_hash(data.password)
     )
     session.add(org)
     session.commit()
@@ -36,7 +36,7 @@ def signup_org(data: OrgSignupRequest, session: Session = Depends(get_session)):
 @router.post("/org/login", response_model=Token)
 def login_org(data: LoginRequest, session: Session = Depends(get_session)):
     org = session.exec(select(Organization).where(Organization.email == data.email)).first()
-    if not org or org.password != data.password:
+    if not org or not verify_password(data.password, org.hashed_password):
         raise HTTPException(status_code=401, detail="Incorrect email or password")
         
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
@@ -51,7 +51,7 @@ def login_org(data: LoginRequest, session: Session = Depends(get_session)):
 @router.post("/employee/login", response_model=Token)
 def login_employee(data: LoginRequest, session: Session = Depends(get_session)):
     emp = session.exec(select(Employee).where(Employee.email == data.email)).first()
-    if not emp or emp.password != data.password:
+    if not emp or not verify_password(data.password, emp.hashed_password):
         raise HTTPException(status_code=401, detail="Incorrect email or password")
         
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)

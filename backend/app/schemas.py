@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, ConfigDict
 from typing import List, Optional
 
 # --- Auth Schemas ---
@@ -25,12 +25,14 @@ class EmployeeSignupByOrg(BaseModel):
 
 # --- Organization ---
 class OrganizationRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
     id: int
     name: str
     email: str
 
 # --- Employee ---
 class EmployeeRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
     id: int
     organization_id: int
     email: str
@@ -40,6 +42,7 @@ class EmployeeRead(BaseModel):
     current_workload: float = 0.0
     capacity: Optional[float] = None
     skills: Optional[str] = None
+    resume_url: Optional[str] = None
 
 # --- Project ---
 class ProjectCreate(BaseModel):
@@ -48,11 +51,15 @@ class ProjectCreate(BaseModel):
     project_load: float
 
 class ProjectRead(ProjectCreate):
+    model_config = ConfigDict(from_attributes=True)
     id: int
     organization_id: int
+    document_url: Optional[str] = None
+    status: Optional[str] = "Unallocated"
 
 # --- Tasks & Roles ---
 class TaskRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
     id: int
     role: str
     task_description: str
@@ -68,6 +75,7 @@ class TeamMember(BaseModel):
     workload_after: float
     matched_skills: List[str] = []
     missing_skills: List[str] = []
+    is_final: bool = False
 
 class AllocationResult(BaseModel):
     status: str
