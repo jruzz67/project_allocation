@@ -139,7 +139,7 @@ export default function Landing() {
               </span>
             </Link>
             <a
-              href="https://github.com/jruzz67/project_allocation"
+              href="https://github.com/jruzz67/project_allocation/blob/main/frontend/README.md"
               className="w-full sm:w-auto inline-flex items-center justify-center gap-3 bg-card px-10 py-5 rounded-2xl text-lg font-bold hover:bg-muted transition-all text-foreground border border-border shadow-sm hover:-translate-y-1"
             >
               <Code2 size={24} />
@@ -351,7 +351,7 @@ export default function Landing() {
           <div className="flex items-center gap-6 text-sm font-bold text-muted-foreground">
             <a href="#" className="hover:text-foreground transition-colors">Privacy Policy</a>
             <a href="#" className="hover:text-foreground transition-colors">Terms of Service</a>
-            <a href="https://github.com/jruzz67/project_allocation" className="hover:text-foreground transition-colors">GitHub</a>
+            <a href="https://github.com/jruzz67/project_allocation/blob/main/frontend/README.md" className="hover:text-foreground transition-colors">GitHub</a>
           </div>
         </div>
       </footer>
